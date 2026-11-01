@@ -31,7 +31,7 @@
 <script>
 (function () {
   var W = 120, H = 260, N = 170, h = 13, FW = 270, FH = 585, BW = 640, BH = 1387, SPLAT = 58;
-  var GRAB = 9, REACH = 58, SNAP = 105;
+  var GRAB = 9, CORE = 11, REACH = 58, SNAP = 85;
 
   var VS_POINT = `#version 300 es
   in vec2 p; uniform vec2 dom; uniform float size;
@@ -122,7 +122,7 @@
   var x = new Float32Array(N), y = new Float32Array(N), px = new Float32Array(N), py = new Float32Array(N);
   var vx = new Float32Array(N), vy = new Float32Array(N), buf = new Float32Array(N * 2);
   var t = 0, split = 0, cool = 0, piece = new Int8Array(N);
-  var grabbed = [], grabId = null, startX = 0, startY = 0, fingerX = 0, fingerY = 0;
+  var grabbed = [], grabId = null, snapped = false, fingerX = 0, fingerY = 0, held = new Uint8Array(N);
   var tiltX = 0, tiltY = 0, softTiltX = 0, softTiltY = 0, betaRest = null, kickX = 0, kickY = 0;
 
   function program(vs, fs) {
@@ -194,7 +194,7 @@
     var r = cv.getBoundingClientRect();
     return [(e.clientX - r.left) / r.width * W, (e.clientY - r.top) / r.height * H];
   }
-  // the finger has to land on the liquid, then everything nearby follows it, less the further away it is
+  // the finger has to land on the liquid and holds only the bit under it; the rest stays free to flow and is just tugged along
   cv.addEventListener('pointerdown', function (e) {
     var p = toWorld(e), hit = false, i, dx, dy;
     for (i = 0; i < N && !hit; i++) {
@@ -202,12 +202,11 @@
       hit = dx * dx + dy * dy < GRAB * GRAB;
     }
     if (!hit) return;
-    grabbed = []; grabId = e.pointerId;
-    startX = fingerX = p[0]; startY = fingerY = p[1];
+    grabbed = []; grabId = e.pointerId; snapped = false; held.fill(0);
+    fingerX = p[0]; fingerY = p[1];
     for (i = 0; i < N; i++) {
-      dx = x[i] - startX; dy = y[i] - startY;
-      var w = 1 - Math.sqrt(dx * dx + dy * dy) / REACH;
-      if (w > 0) grabbed.push({ i: i, x0: x[i], y0: y[i], w: w * Math.sqrt(w) });
+      dx = x[i] - fingerX; dy = y[i] - fingerY;
+      if (dx * dx + dy * dy < CORE * CORE) { grabbed.push({ i: i, ox: dx * .5, oy: dy * .5 }); held[i] = 1; }
     }
     try { cv.setPointerCapture(e.pointerId); } catch (err) {}
   });
@@ -216,7 +215,7 @@
     var p = toWorld(e);
     fingerX = p[0]; fingerY = p[1];
   });
-  function release(e) { if (e.pointerId === grabId) { grabbed = []; grabId = null; } }
+  function release(e) { if (e.pointerId === grabId) { grabbed = []; grabId = null; held.fill(0); } }
   cv.addEventListener('pointerup', release);
   cv.addEventListener('pointercancel', release);
 
@@ -273,7 +272,7 @@
     var ax = W / 2 + Math.sin(t * .07) * 6 + softTiltX * 28, ay = H / 2 + Math.sin(t * .05) * 12 + softTiltY * 40, i, j, dx, dy, r2, q, r;
     for (i = 0; i < N; i++) {
       dx = ax - x[i]; dy = ay - y[i];
-      var d = Math.sqrt(dx * dx + dy * dy) + .01, pull = Math.min(d * .0007, .008) * (split > 0 ? .12 : 1);
+      var d = Math.sqrt(dx * dx + dy * dy) + .01, pull = Math.min(d * .0007, .008) * (split > 0 ? .12 : grabbed.length ? .25 : 1);
       vx[i] += kx + dx / d * pull + .004 * Math.sin(y[i] * .04 + t * .2);
       vy[i] += ky + dy / d * pull + .004 * Math.sin(x[i] * .05 - t * .15 + y[i] * .015);
     }
@@ -324,13 +323,23 @@
       x[i] += sx; y[i] += sy;
     }
     if (grabbed.length) {
-      var pullX = fingerX - startX, pullY = fingerY - startY;
-      // stretched too far: the strand gives way and only the tip stays on the finger
-      if (pullX * pullX + pullY * pullY > SNAP * SNAP) grabbed = grabbed.filter(function (c) { return c.w > .6; });
-      for (var g = 0; g < grabbed.length; g++) {
+      var g, bodyX = 0, bodyY = 0;
+      for (i = 0; i < N; i++) { bodyX += x[i] / N; bodyY += y[i] / N; }
+      dx = fingerX - bodyX; dy = fingerY - bodyY;
+      // stretched too far from the body: the strand gives way and only the bit under the finger stays on it
+      if (dx * dx + dy * dy > SNAP * SNAP) snapped = true;
+      if (!snapped) for (i = 0; i < N; i++) {
+        if (held[i]) continue;
+        dx = fingerX - x[i]; dy = fingerY - y[i];
+        r = Math.sqrt(dx * dx + dy * dy) + .01;
+        if (r >= REACH) continue;
+        q = 1 - r / REACH;
+        x[i] += dx / r * q * .03; y[i] += dy / r * q * .03;
+      }
+      for (g = 0; g < grabbed.length; g++) {
         var c = grabbed[g];
-        x[c.i] += (c.x0 + pullX * c.w - x[c.i]) * .08 * c.w;
-        y[c.i] += (c.y0 + pullY * c.w - y[c.i]) * .08 * c.w;
+        x[c.i] += (fingerX + c.ox - x[c.i]) * .08;
+        y[c.i] += (fingerY + c.oy - y[c.i]) * .08;
       }
     }
     var hits = 0;
