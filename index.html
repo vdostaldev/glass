@@ -21,24 +21,17 @@
   #dot { width:7px; height:7px; border-radius:50%; background:#fff; animation:breathe 1.5s ease-in-out infinite; }
   #tap { position:absolute; top:calc(50% + 22px); color:#777; font:300 12px/1 -apple-system,"Helvetica Neue",sans-serif; letter-spacing:.24em; text-indent:.24em; opacity:0; transition:opacity .6s ease; }
   #tap.on { opacity:1; }
-  #tune { position:fixed; left:12px; right:12px; bottom:calc(12px + env(safe-area-inset-bottom)); padding:14px; border-radius:16px; background:rgba(20,20,24,.92); color:#ddd; font:13px/1.2 -apple-system,"Helvetica Neue",sans-serif; display:none; }
-  #tune.on { display:block; }
-  #tune label { display:block; margin-bottom:10px; }
-  #tune label span { float:right; color:#fff; }
-  #tune input { display:block; width:100%; margin-top:6px; }
-  #tune button { padding:9px 12px; margin-right:6px; border-radius:9px; border:1px solid #555; background:#2a2b30; color:#fff; font:inherit; }
   @keyframes breathe { 0%,100% { transform:scale(.7); opacity:.45; } 50% { transform:scale(1.5); opacity:1; } }
 </style>
 </head>
 <body>
 <canvas id="stage"></canvas>
-<div id="tune"></div>
 <div id="loader"><div id="dot"></div><div id="tap">tap</div></div>
 
 <script>
 (function () {
   var W = 120, H = 260, N = 170, h = 13, FW = 270, FH = 585, BW = 640, BH = 1387, SPLAT = 58;
-  var GRAB = 9, LOSE = 22, FOLLOW = 26;
+  var GRAB = 9, LOSE = 22, FOLLOW = 26, HOLD = .4, MOVE = .8, CENTRE = 1.3;
 
   var VS_POINT = `#version 300 es
   in vec2 p; uniform vec2 dom; uniform float size;
@@ -128,13 +121,10 @@
 
   var x = new Float32Array(N), y = new Float32Array(N), px = new Float32Array(N), py = new Float32Array(N);
   var vx = new Float32Array(N), vy = new Float32Array(N), buf = new Float32Array(N * 2);
-  var t = 0, split = 0, cool = 0, piece = new Int8Array(N);
+  var t = 0;
   var fingerId = null, following = false, fingerX = 0, fingerY = 0;
   var gravX = 0, gravY = 0, gravZ = -1, hasOrientation = false, signScore = 0, lowX = 0, lowY = 0, lowZ = 0;
   var forceX = 0, forceY = 0, softForceX = 0, softForceY = 0, kickX = 0, kickY = 0;
-  var DEFAULTS = { tilt: .03, move: .5, centre: 1, glide: .99, flip: 1 }, tune = {};
-  for (var key in DEFAULTS) tune[key] = DEFAULTS[key];
-  try { var saved = JSON.parse(localStorage.getItem('glass-tune') || '{}'); for (key in saved) if (key in DEFAULTS) tune[key] = saved[key]; } catch (err) {}
 
   function program(vs, fs) {
     var pr = gl.createProgram();
@@ -220,7 +210,7 @@
   cv.addEventListener('pointerup', release);
   cv.addEventListener('pointercancel', release);
 
-  // the phone is a jar: the liquid feels gravity and is left behind when the jar accelerates, like a real object
+  // only the phone's movement stirs the liquid; which way is down is needed just to take gravity out of the reading
   function onOrientation(e) {
     if (e.gamma === null || e.beta === null) return;
     var b = e.beta * Math.PI / 180, g = e.gamma * Math.PI / 180;
@@ -237,10 +227,10 @@
     var fx = sign * A.x / 9.81, fy = sign * A.y / 9.81, fz = sign * A.z / 9.81;
     if (hasOrientation) { gx = gravX; gy = gravY; lowZ = gravZ; }
     else { lowX += (fx - lowX) * .03; lowY += (fy - lowY) * .03; lowZ += (fz - lowZ) * .03; gx = lowX; gy = lowY; }
-    // take gravity out and what is left is the phone's own movement; the liquid is left behind, so it gets the opposite
-    var mx = sign * (gx - fx) * tune.flip, my = sign * (gy - fy) * tune.flip, m = Math.sqrt(mx * mx + my * my);
+    // take gravity out and what is left is the phone's own movement; the liquid goes with it
+    var mx = sign * (fx - gx), my = sign * (fy - gy), m = Math.sqrt(mx * mx + my * my);
     var keep = m > .03 ? (m - .03) / m : 0, a = ((screen.orientation && screen.orientation.angle) || window.orientation || 0) * Math.PI / 180;
-    var dx = gx * tune.tilt + mx * keep * tune.move, dy = gy * tune.tilt + my * keep * tune.move;
+    var dx = mx * keep * MOVE, dy = my * keep * MOVE;
     forceX = dx * Math.cos(a) - dy * Math.sin(a);
     forceY = -(dx * Math.sin(a) + dy * Math.cos(a));
   }
@@ -254,56 +244,22 @@
     if (d) bang(d[0], d[1]);
   });
 
-  // a hard hit cuts the liquid into a few pieces; each stays sticky and round, and they ignore each other until they rejoin
-  function tear() {
-    var count = 3 + (Math.random() * 2 | 0), seeds = [], cx = 0, cy = 0, i, k;
-    for (k = 0; k < count; k++) { i = Math.random() * N | 0; seeds.push([x[i], y[i]]); }
-    for (i = 0; i < N; i++) {
-      var best = 0, bestD = 1e9;
-      for (k = 0; k < count; k++) {
-        var dx = x[i] - seeds[k][0], dy = y[i] - seeds[k][1], d2 = dx * dx + dy * dy;
-        if (d2 < bestD) { bestD = d2; best = k; }
-      }
-      piece[i] = best; cx += x[i] / N; cy += y[i] / N;
-    }
-    for (k = 0; k < count; k++) {
-      var ox = seeds[k][0] - cx, oy = seeds[k][1] - cy, len = Math.sqrt(ox * ox + oy * oy) + .01;
-      seeds[k][0] = ox / len * 2.6; seeds[k][1] = oy / len * 2.6;
-    }
-    for (i = 0; i < N; i++) { vx[i] += seeds[piece[i]][0]; vy[i] += seeds[piece[i]][1]; }
-    split = 540;
-  }
-
   function step() {
     t += 1 / 60;
-    if (split > 0) split--;
-    if (cool > 0) cool--;
     softForceX += (forceX - softForceX) * .7; softForceY += (forceY - softForceY) * .7;
     var kx = Math.max(-5.5, Math.min(5.5, kickX)), ky = Math.max(-5.5, Math.min(5.5, kickY));
     kickX = kickY = 0;
     var ax = W / 2 + Math.sin(t * .07) * 5, ay = H / 2 + Math.sin(t * .05) * 8, i, j, dx, dy, r2, q, r;
     for (i = 0; i < N; i++) {
       dx = ax - x[i]; dy = ay - y[i];
-      var d = Math.sqrt(dx * dx + dy * dy) + .01, pull = Math.min(d * .0006 + Math.max(0, d - 30) * .0016, .036) * (split > 0 ? .5 : 1) * tune.centre;
+      var d = Math.sqrt(dx * dx + dy * dy) + .01, pull = Math.min(d * .0006 + Math.max(0, d - 30) * .0016, .036) * CENTRE;
       vx[i] += kx + softForceX + dx / d * pull + .004 * Math.sin(y[i] * .04 + t * .2);
       vy[i] += ky + softForceY + dy / d * pull + .004 * Math.sin(x[i] * .05 - t * .15 + y[i] * .015);
-    }
-    // separate pieces keep a visible gap, easing off as they get ready to rejoin
-    if (split > 0) {
-      var apart = Math.min(1, split / 150) * .05;
-      for (i = 0; i < N; i++) for (j = i + 1; j < N; j++) {
-        if (piece[i] === piece[j]) continue;
-        dx = x[j] - x[i]; dy = y[j] - y[i]; r2 = dx * dx + dy * dy;
-        if (r2 > 900 || r2 < 1e-4) continue;
-        r = Math.sqrt(r2);
-        var push = (1 - r / 30) * apart / r;
-        vx[i] -= dx * push; vy[i] -= dy * push; vx[j] += dx * push; vy[j] += dy * push;
-      }
     }
     // sticky: neighbours drag each other along and everything loses speed fast
     for (i = 0; i < N; i++) for (j = i + 1; j < N; j++) {
       dx = x[j] - x[i]; dy = y[j] - y[i]; r2 = dx * dx + dy * dy;
-      if (r2 > h * h || r2 < 1e-4 || (split > 0 && piece[i] !== piece[j])) continue;
+      if (r2 > h * h || r2 < 1e-4) continue;
       q = 1 - Math.sqrt(r2) / h;
       var m = q * .3, dvx = (vx[j] - vx[i]) * m, dvy = (vy[j] - vy[i]) * m;
       vx[i] += dvx; vy[i] += dvy; vx[j] -= dvx; vy[j] -= dvy;
@@ -311,7 +267,7 @@
     // the liquid is thick inside but glides over the screen, so a move carries it and it stays there; going home is damped, so it never bounces
     var meanX = 0, meanY = 0, bodyX = 0, bodyY = 0;
     for (i = 0; i < N; i++) { meanX += vx[i] / N; meanY += vy[i] / N; bodyX += x[i] / N; bodyY += y[i] / N; }
-    var glide = meanX * (bodyX - ax) + meanY * (bodyY - ay) < 0 ? .93 : tune.glide;
+    var glide = meanX * (bodyX - ax) + meanY * (bodyY - ay) < 0 ? .93 : .99;
     for (i = 0; i < N; i++) {
       vx[i] = meanX * glide + (vx[i] - meanX) * .95; vy[i] = meanY * glide + (vy[i] - meanY) * .95;
       px[i] = x[i]; py[i] = y[i];
@@ -320,7 +276,7 @@
     for (i = 0; i < N; i++) {
       var rho = 0, near = 0;
       for (j = 0; j < N; j++) {
-        if (i === j || (split > 0 && piece[i] !== piece[j])) continue;
+        if (i === j) continue;
         dx = x[j] - x[i]; dy = y[j] - y[i]; r2 = dx * dx + dy * dy;
         if (r2 > h * h) continue;
         q = 1 - Math.sqrt(r2) / h;
@@ -329,7 +285,7 @@
       var P = .05 * (rho - 3), Pn = .1 * near, sx = 0, sy = 0;
       if (P < 0) P *= 3.2;
       for (j = 0; j < N; j++) {
-        if (i === j || (split > 0 && piece[i] !== piece[j])) continue;
+        if (i === j) continue;
         dx = x[j] - x[i]; dy = y[j] - y[i]; r2 = dx * dx + dy * dy;
         if (r2 > h * h || r2 < 1e-4) continue;
         r = Math.sqrt(r2); q = 1 - r / h;
@@ -351,17 +307,15 @@
         r = Math.sqrt(dx * dx + dy * dy) + .01;
         if (r >= FOLLOW) continue;
         q = 1 - r / FOLLOW;
-        x[i] += dx / r * q * .27; y[i] += dy / r * q * .27;
+        x[i] += dx / r * q * HOLD; y[i] += dy / r * q * HOLD;
       }
     }
-    var hits = 0;
     for (i = 0; i < N; i++) {
-      if (x[i] < 4) { if (vx[i] < -1.8) hits++; x[i] = 4; } else if (x[i] > W - 4) { if (vx[i] > 1.8) hits++; x[i] = W - 4; }
-      if (y[i] < 4) { if (vy[i] < -1.8) hits++; y[i] = 4; } else if (y[i] > H - 4) { if (vy[i] > 1.8) hits++; y[i] = H - 4; }
+      if (x[i] < 4) x[i] = 4; else if (x[i] > W - 4) x[i] = W - 4;
+      if (y[i] < 4) y[i] = 4; else if (y[i] > H - 4) y[i] = H - 4;
       vx[i] = Math.max(-7, Math.min(7, x[i] - px[i]));
       vy[i] = Math.max(-7, Math.min(7, y[i] - py[i]));
     }
-    if (hits > 5 && cool === 0 && !following) { tear(); cool = 240; }
   }
 
   function draw() {
@@ -409,30 +363,6 @@
     gl.drawArrays(gl.TRIANGLE_STRIP, 0, 4);
   }
 
-  // hidden tuner: tap with two fingers, or press t on a computer
-  var panel = document.getElementById('tune');
-  function saveTune() { try { localStorage.setItem('glass-tune', JSON.stringify(tune)); } catch (err) {} }
-  function buildPanel() {
-    panel.innerHTML = '';
-    [['tilt', 'Tilt', 0, .12], ['move', 'Movement', 0, 1], ['centre', 'Centre', 0, 3], ['glide', 'Glide', .9, .999]].forEach(function (row) {
-      var label = document.createElement('label'), value = document.createElement('span'), input = document.createElement('input');
-      label.textContent = row[1]; value.textContent = (+tune[row[0]]).toFixed(3);
-      input.type = 'range'; input.min = row[2]; input.max = row[3]; input.step = (row[3] - row[2]) / 200; input.value = tune[row[0]];
-      input.addEventListener('input', function () { tune[row[0]] = +input.value; value.textContent = tune[row[0]].toFixed(3); saveTune(); });
-      label.appendChild(value); label.appendChild(input); panel.appendChild(label);
-    });
-    [[tune.flip > 0 ? 'Flip movement' : 'Unflip movement', function () { tune.flip = -tune.flip; saveTune(); buildPanel(); }],
-     ['Reset', function () { for (var k in DEFAULTS) tune[k] = DEFAULTS[k]; saveTune(); buildPanel(); }],
-     ['Done', function () { panel.classList.remove('on'); }]].forEach(function (b) {
-      var button = document.createElement('button');
-      button.type = 'button'; button.textContent = b[0]; button.addEventListener('click', b[1]);
-      panel.appendChild(button);
-    });
-  }
-  function togglePanel() { buildPanel(); panel.classList.toggle('on'); }
-  cv.addEventListener('touchstart', function (e) { if (e.touches.length === 2) togglePanel(); });
-  window.addEventListener('keydown', function (e) { if (e.key === 't') togglePanel(); });
-
   function run() {
     var last = performance.now(), acc = 0;
     (function loop(now) {
@@ -466,7 +396,7 @@
     }, 1200);
   }, 60);
 
-  if (location.hash === '#debug') window.__glass = { step: step, draw: draw, bang: bang, listen: listen, tune: tune, state: function () { return { split: split, x: x, y: y, H: H, following: following }; } };
+  if (location.hash === '#debug') window.__glass = { step: step, draw: draw, bang: bang, listen: listen, state: function () { return { x: x, y: y, H: H, following: following }; } };
 
   if ('serviceWorker' in navigator) navigator.serviceWorker.register('sw.js').catch(function () {});
 })();
