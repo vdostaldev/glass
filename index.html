@@ -349,7 +349,7 @@
       vx[i] = Math.max(-7, Math.min(7, x[i] - px[i]));
       vy[i] = Math.max(-7, Math.min(7, y[i] - py[i]));
     }
-    if (hits > 5 && cool === 0) { tear(); cool = 240; }
+    if (hits > 5 && cool === 0 && !grabbed.length) { tear(); cool = 240; }
   }
 
   function draw() {
