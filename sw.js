@@ -1,4 +1,4 @@
-var CACHE = 'glass-v4';
+var CACHE = 'glass-v5';
 var FILES = ['./', 'index.html', 'manifest.webmanifest', 'icon-180.png', 'icon-512.png'];
 
 self.addEventListener('install', function (e) {
