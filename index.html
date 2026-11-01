@@ -221,14 +221,14 @@
     var A = e.accelerationIncludingGravity;
     if (!A || A.x === null || A.y === null || A.z === null) return;
     var size = Math.sqrt(A.x * A.x + A.y * A.y + A.z * A.z), sign, gx, gy;
-    // iPhones and Android report this with opposite signs, so learn which one this phone uses from which way is down
+    // the reading is movement plus gravity on iPhone and movement minus gravity on Android, so learn which from which way is down
     if (hasOrientation && size > 6.5 && size < 13) signScore += (A.x * gravX + A.y * gravY + A.z * gravZ - signScore) * .03;
     sign = hasOrientation ? (signScore < 0 ? -1 : 1) : (askFirst ? 1 : -1);
     var fx = sign * A.x / 9.81, fy = sign * A.y / 9.81, fz = sign * A.z / 9.81;
     if (hasOrientation) { gx = gravX; gy = gravY; lowZ = gravZ; }
     else { lowX += (fx - lowX) * .03; lowY += (fy - lowY) * .03; lowZ += (fz - lowZ) * .03; gx = lowX; gy = lowY; }
-    // what is left once gravity is taken out is the phone's own movement
-    var mx = fx - gx, my = fy - gy, mz = fz - lowZ, m = Math.sqrt(mx * mx + my * my + mz * mz);
+    // take gravity out and what is left is the phone's own movement; the liquid is left behind, so it gets the opposite
+    var mx = sign * (gx - fx), my = sign * (gy - fy), mz = sign * (lowZ - fz), m = Math.sqrt(mx * mx + my * my + mz * mz);
     var keep = m > .15 ? (m - .15) / m : 0, a = ((screen.orientation && screen.orientation.angle) || window.orientation || 0) * Math.PI / 180;
     var dx = gx * .014 + mx * keep * .12, dy = gy * .014 + my * keep * .12, cap = Math.sqrt(dx * dx + dy * dy);
     if (cap > .6) { dx *= .6 / cap; dy *= .6 / cap; }
